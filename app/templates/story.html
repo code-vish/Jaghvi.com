@@ -1,0 +1,2 @@
+{% extends 'base.html' %}{% from 'macros.html' import icon %}
+{% block content %}<section class="story-page"><p class="eyebrow">{{ site.story_eyebrow }}</p><h1>{{ site.story_title }}</h1><div class="story-page-mark"><img src="{{ site.logo }}" alt="{{ site.brand_name }} signature" width="220" height="220"></div><div class="prose">{% for paragraph in site.story_body.split('\n\n') %}<p>{{ paragraph }}</p>{% endfor %}</div><p class="large-quote">{{ site.story_quote }}</p><a class="text-link" href="/shop">Explore our collections {{ icon('arrow') }}</a></section>{% endblock %}

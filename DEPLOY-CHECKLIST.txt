@@ -1,0 +1,51 @@
+JAGHVI — GITHUB + VERCEL CHECKLIST
+
+PUSH THESE TO GITHUB (repo root):
+  .env.example
+  .gitignore
+  .vercelignore
+  README.md
+  DEPLOY-CHECKLIST.txt
+  pyproject.toml
+  requirements.txt
+  manage.py
+  start.py
+  app/
+  public/
+  tests/                 (optional, safe to push)
+  requirements-dev.txt   (optional, safe to push)
+
+DO NOT PUSH:
+  .env
+  .env.local
+  data/
+  .vercel/
+  .venv/
+  *.sqlite3
+  any password/token/secret
+
+VERCEL PROJECT SETTINGS:
+  Framework/Preset: FastAPI
+  Root Directory: ./
+  Build Command: leave empty/default
+  Output Directory: leave empty/default
+
+CONNECT STORAGE BEFORE THE FINAL DEPLOY:
+  1) Turso database through Vercel Storage/Marketplace
+     - TURSO_DATABASE_URL (added by integration)
+     - TURSO_AUTH_TOKEN (added by integration)
+
+  2) Vercel Blob store, PUBLIC access
+     - BLOB_READ_WRITE_TOKEN (added by Vercel)
+
+ADD THESE MANUALLY IN VERCEL ENVIRONMENT VARIABLES:
+  JAGHVI_OWNER_ID
+  JAGHVI_OWNER_EMAIL
+  JAGHVI_OWNER_PASSWORD   (12–128 characters)
+
+Then redeploy and open:
+  https://YOUR-PROJECT.vercel.app/
+  https://YOUR-PROJECT.vercel.app/owner
+
+After the first successful owner login, you can remove JAGHVI_OWNER_PASSWORD
+from Vercel and redeploy. The hashed owner account stays in Turso.

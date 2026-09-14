@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% from 'macros.html' import icon %}{% block content %}<section class="confirmation-page"><p class="eyebrow">{{ status or 'PLEASE TRY AGAIN' }}</p><h1>{{ title }}</h1><p>{{ error }}</p><a class="text-link" href="/">Return to Jaghvi {{ icon('arrow') }}</a></section>{% endblock %}

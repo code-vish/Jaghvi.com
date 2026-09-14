@@ -1,0 +1,18 @@
+{% macro icon(name, cls='') -%}<svg class="icon {{ cls }}" aria-hidden="true"><use href="/static/icons.svg#{{ name }}"></use></svg>{%- endmacro %}
+{% macro csrf_input(csrf) %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
+{% macro product_card(p, site, csrf) %}
+<article class="product-card">
+  <a class="product-photo" href="/pieces/{{ p.slug }}"><img src="{{ p.cover }}" alt="{{ p.name }}" loading="lazy" width="600" height="750">{% if p.available == 0 %}<span class="product-tag">Currently unavailable</span>{% endif %}</a>
+  <div class="product-caption"><div><p class="micro muted">{{ p.material }}</p><a href="/pieces/{{ p.slug }}"><h3>{{ p.name }}</h3></a><p class="product-price">{% if p.variant_count %}From {% endif %}{{ site.currency_symbol }}{{ p.effective_price|money }}</p></div>
+  <form action="/wishlist" method="post">{{ csrf_input(csrf) }}<input type="hidden" name="product_id" value="{{ p.id }}"><button class="icon-button" aria-label="Save or unsave {{ p.name }}">{{ icon('heart') }}</button></form></div>
+</article>
+{% endmacro %}
+{% macro field(label, name, value='', type='text', help='', required=false) %}
+<label class="field"><span>{{ label }}</span><input type="{{ type }}" name="{{ name }}" value="{{ value }}" {% if required %}required{% endif %} {% if type == 'number' %}min="0" step="0.01"{% endif %}>{% if help %}<small>{{ help }}</small>{% endif %}</label>
+{% endmacro %}
+{% macro textarea(label, name, value='', rows=4, help='') %}
+<label class="field"><span>{{ label }}</span><textarea name="{{ name }}" rows="{{ rows }}">{{ value }}</textarea>{% if help %}<small>{{ help }}</small>{% endif %}</label>
+{% endmacro %}
+{% macro switch(label, name, checked=false, help='') %}
+<label class="switch-row"><span><b>{{ label }}</b>{% if help %}<small>{{ help }}</small>{% endif %}</span><input type="checkbox" name="{{ name }}" {% if checked %}checked{% endif %}><span class="switch-visual" aria-hidden="true"></span></label>
+{% endmacro %}

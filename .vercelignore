@@ -1,0 +1,12 @@
+tests/
+docs/
+data/
+previews/
+Jaghvi-Preview.html
+START-HERE.html
+Dockerfile
+compose.yaml
+Caddyfile
+Start-Windows.bat
+Start-Mac.command
+requirements-dev.txt

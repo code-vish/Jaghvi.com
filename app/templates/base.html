@@ -1,0 +1,22 @@
+{% from 'macros.html' import icon, csrf_input %}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ title or site.seo_title }}</title>
+<meta name="description" content="{{ product.description[:155] if product is defined and product.description else site.seo_description }}"><meta name="theme-color" content="{{ site.background_color }}">
+<meta property="og:title" content="{{ title or site.seo_title }}"><meta property="og:description" content="{{ site.seo_description }}"><meta property="og:type" content="website"><meta property="og:image" content="{{ request.base_url }}static/assets/jaghvi-original.png">
+<link rel="icon" href="/static/assets/favicon.png"><link rel="stylesheet" href="/static/styles.css">
+<style>:root{--paper:{{ site.background_color }};--ink:{{ site.text_color }};--accent:{{ site.accent_color }};}</style>
+<script src="/static/store.js" defer></script>{% block head %}{% endblock %}</head>
+<body class="{{ 'type-modern' if site.type_style == 'modern' else '' }} {% block bodyclass %}{% endblock %}">
+<a href="#main" class="skip-link">Skip to content</a>
+{% if site.announcement %}<div class="announcement">{{ site.announcement }} <span>✧</span></div>{% endif %}
+<header class="site-header">
+<button class="icon-button mobile-menu-toggle" aria-label="Open navigation" aria-expanded="false" aria-controls="site-nav">{{ icon('menu') }}</button>
+<a class="brand" href="/" aria-label="{{ site.brand_name }} home"><img src="{{ site.logo }}" alt="" width="48" height="48"><span>{{ site.brand_name|upper }}</span></a>
+<nav class="primary-menu" id="site-nav" aria-label="Main navigation"><a href="/shop">All jewelry</a>{% for c in nav_collections[:2] %}<a href="/shop?collection={{ c.slug }}">{{ c.name }}</a>{% endfor %}<a href="/story">Our story</a></nav>
+<div class="header-actions"><button class="icon-button" data-search-open aria-label="Search jewelry">{{ icon('search') }}</button><a class="icon-button wishlist-header" href="/wishlist" aria-label="Saved pieces">{{ icon('heart') }}{% if wish_count %}<span class="count">{{ wish_count }}</span>{% endif %}</a><a class="bag-link" href="/bag">{{ icon('bag') }}<span>Bag ({{ cart_count }})</span></a></div>
+</header>
+<dialog class="search-dialog"><form method="get" action="/shop"><label for="search-field">Find something that feels like you.</label><div class="search-line">{{ icon('search') }}<input id="search-field" name="q" type="search" placeholder="Search jewelry, materials, or a collection" maxlength="100"><button class="arrow-button" aria-label="Search">{{ icon('arrow') }}</button></div></form><button type="button" class="search-close icon-button" aria-label="Close search">{{ icon('close') }}</button></dialog>
+{% if notice %}<div class="notice" role="status">{{ icon('check') }} {{ notice }}<button class="icon-button" data-dismiss aria-label="Dismiss message">{{ icon('close') }}</button></div>{% endif %}
+<main id="main">{% block content %}{% endblock %}</main>
+<footer class="site-footer"><div class="footer-top"><div class="footer-brand"><img src="{{ site.logo }}" alt="{{ site.brand_name }} emblem" width="80" height="80"><p>{{ site.footer_line }}</p></div><div><h3>Explore</h3><a href="/shop">All jewelry</a>{% for c in nav_collections[:4] %}<a href="/shop?collection={{ c.slug }}">{{ c.name }}</a>{% endfor %}<a href="/story">Our story</a></div><div><h3>Here for you</h3><a href="/contact">Contact us</a><a href="/policies/shipping">Shipping & delivery</a><a href="/policies/returns">Returns & exchanges</a><a href="/policies/terms">Terms of service</a></div><div><h3>Stay connected</h3>{% if site.instagram_url %}<a href="{{ site.instagram_url }}" target="_blank" rel="noopener noreferrer">Instagram ↗</a>{% endif %}{% if site.contact_email %}<a href="mailto:{{ site.contact_email }}">{{ site.contact_email }}</a>{% endif %}<p class="footer-note">Silver & fashion jewelry.<br>Entirely your own.</p><a href="/contact">A conversation with Jaghvi {{ icon('arrow') }}</a></div></div>
+<div class="footer-wordmark" aria-hidden="true">{{ site.brand_name|upper }}</div><div class="footer-bottom"><span>© {{ year }} {{ site.brand_name }}. All rights reserved.</span><a href="/policies/privacy">Privacy policy</a><span>{{ site.currency }} · {{ site.currency_symbol }}</span></div></footer>
+</body></html>
