@@ -4,6 +4,9 @@ import html
 import io
 import json
 import math
+import logging
+import threading
+import time
 import os
 import re
 import secrets
@@ -14,7 +17,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -24,6 +27,7 @@ from .db import (ROOT, UPLOADS, PRODUCTION, IS_VERCEL, DEFAULTS, database, initi
 from .security import (COOKIE, digest, now, new_session, require_owner, checked_form,
                        limited, client_identity, password_valid, validate_password, password_hasher, audit)
 from .media import save_image, delete_image, MAX_IMAGE_SIZE
+from .release import BUILD_ID
 
 CATEGORIES=['Earrings','Necklaces','Rings','Bracelets','Anklets','Sets','Other']
 STATUS=['requested','confirmed','shipped','completed','cancelled']
@@ -43,29 +47,95 @@ def bootstrap_owner_from_env():
     if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',owner_email):
         raise RuntimeError('JAGHVI_OWNER_EMAIL is not a valid email address.')
     validate_password(password)
+    # Password hashing is deliberately outside the short remote transaction.
+    encoded = password_hasher.hash(password)
     with database(True) as con:
         if not con.execute('SELECT 1 FROM owners').fetchone():
             con.execute('INSERT INTO owners(username,email,password_hash,created_at) VALUES (?,?,?,?)',
-                        (username,owner_email,password_hasher.hash(password),now()))
+                        (username,owner_email,encoded,now()))
+
+
+_startup_lock = threading.Lock()
+_startup_ready = False
+_startup_error = None
+_startup_attempt = 0.0
+logger = logging.getLogger('jaghvi')
+
+
+def ensure_startup(force=False):
+    """One initializer per process; failed setup is a truthful, recoverable 503."""
+    global _startup_ready, _startup_error, _startup_attempt
+    with _startup_lock:
+        if _startup_ready and not force:
+            return True
+        if not force and _startup_error is not None and time.monotonic() - _startup_attempt < 5:
+            return False
+        _startup_attempt = time.monotonic()
+        try:
+            initialize()
+            bootstrap_owner_from_env()
+            with database() as con:
+                site_settings(con)
+            _startup_ready, _startup_error = True, None
+            logger.info('Jaghvi initialized: %s', BUILD_ID)
+        except DatabaseError as exc:
+            _startup_ready, _startup_error = False, exc
+            logger.error('Jaghvi startup [%s]: %s', exc.code, str(exc))
+        except (ValueError, RuntimeError) as exc:
+            _startup_ready = False
+            _startup_error = DatabaseError(
+                'Owner setup is invalid. Check the owner ID, email and password requirements.',
+                code='OWNER_SETUP_INVALID')
+            logger.error('Jaghvi startup [%s], exception type %s', _startup_error.code, type(exc).__name__)
+        except Exception as exc:
+            _startup_ready = False
+            _startup_error = DatabaseError('Application initialization failed.', code='APP_STARTUP_ERROR')
+            # No exception values, SQL arguments or secrets are sent to visitors.
+            logger.error('Jaghvi startup [APP_STARTUP_ERROR], exception type %s', type(exc).__name__)
+        return _startup_ready
+
+
+def unavailable_response(error=None):
+    error = error or _startup_error or DatabaseError()
+    code = html.escape(error.code)
+    return HTMLResponse(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="robots" content="noindex"><title>Jaghvi | Service unavailable</title>'
+        '<style>body{margin:0;background:#f6f6f4;color:#292b2a;font:17px/1.7 Georgia,serif}'
+        'main{max-width:620px;margin:15vh auto;padding:32px}h1{font-weight:400;font-size:38px}'
+        'small,code{font-family:system-ui,sans-serif}a{color:inherit}</style></head><body><main>'
+        '<small>J A G H V I</small><h1>A moment, please.</h1>'
+        '<p>The store is temporarily unavailable. Please try again shortly.</p>'
+        '<p>Store owner: the deployment needs attention. The service check provides a safe diagnostic code.</p>'
+        f'<p><code>{code}</code></p><p><a href="/health">Open service check</a></p>'
+        f'<small>Build: {BUILD_ID}</small></main></body></html>',
+        status_code=503, headers={'Cache-Control':'no-store','Retry-After':'15','X-Robots-Tag':'noindex'},
+    )
 
 
 @asynccontextmanager
 async def lifespan(app):
-    initialize()
-    bootstrap_owner_from_env()
-    yield
+    # Do not run synchronous HTTP or schema initialization on the ASGI event loop.
+    # A bad connection is reported as 503, not swallowed or replaced by local data.
+    await run_in_threadpool(ensure_startup, True)
+    try:
+        yield
+    finally:
+        from .turso_http import close_http_client
+        await run_in_threadpool(close_http_client)
 
 app=FastAPI(title='Jaghvi',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 default_hosts='localhost,127.0.0.1,testserver,*.vercel.app,jaghvi.com,*.jaghvi.com'
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=[x.strip() for x in os.environ.get('ALLOWED_HOSTS',default_hosts).split(',') if x.strip()])
 STATIC_ROOT=ROOT/'app/static'
-# Keep the static directory inside the FastAPI source tree and pass a literal path.
-# Vercel can detect this mount at build time and include/promote the files correctly.
-app.mount('/static',StaticFiles(directory='app/static'),name='static')
+# Keep assets inside the application tree and resolve them independently of cwd.
+# pyproject.toml explicitly keeps this directory in the function bundle.
+app.mount('/static',StaticFiles(directory=str(STATIC_ROOT),check_dir=False),name='static')
 if not IS_VERCEL:
     UPLOADS.mkdir(parents=True,exist_ok=True)
     app.mount('/media',StaticFiles(directory=UPLOADS),name='media')
-templates=Jinja2Templates(directory='app/templates')
+templates=Jinja2Templates(directory=str(ROOT/'app/templates'))
 templates.env.filters['money']=lambda v:f'{int(v)/100:,.2f}'.removesuffix('.00')
 templates.env.filters['date']=lambda v:__import__('datetime').datetime.fromtimestamp(v,__import__('datetime').timezone.utc).strftime('%d %b %Y')
 
@@ -90,24 +160,41 @@ class BodyLimitMiddleware:
         await self.app(scope,replay,send)
 app.add_middleware(BodyLimitMiddleware)
 
+def load_request_session(request):
+    token=request.cookies.get(COOKIE,'')
+    with database() as con:
+        row=con.execute('SELECT * FROM sessions WHERE token_hash=? AND expires_at>?',
+                        (digest(token),now())).fetchone() if token else None
+    if row:
+        session=dict(row); request.state.new_cookie=None
+    else:
+        token,session=new_session(); request.state.new_cookie=token
+    request.state.session=session
+    try:
+        request.state.data=json.loads(session['data'])
+    except (ValueError, TypeError):
+        raise DatabaseError('The session contains invalid data.', code='DB_SESSION_INVALID') from None
+    with database() as con:
+        owner=con.execute('SELECT id,username,email FROM owners WHERE id=?',(session['owner_id'],)).fetchone() if session['owner_id'] else None
+    request.state.owner=dict(owner) if owner else None
+
+
 @app.middleware('http')
 async def session_and_headers(request,call_next):
-    dynamic=not request.url.path.startswith(('/static/','/media/')) and request.url.path!='/health'
-    if dynamic:
-        token=request.cookies.get(COOKIE,'')
-        with database() as con:
-            row=con.execute('SELECT * FROM sessions WHERE token_hash=? AND expires_at>?',(digest(token),now())).fetchone() if token else None
-        if row:
-            session=dict(row);request.state.new_cookie=None
+    dynamic=not request.url.path.startswith(('/static/','/media/')) and request.url.path not in ('/health','/favicon.ico')
+    try:
+        if dynamic:
+            if not await run_in_threadpool(ensure_startup):
+                response = unavailable_response()
+            else:
+                await run_in_threadpool(load_request_session, request)
+                response = await call_next(request)
         else:
-            token,session=new_session();request.state.new_cookie=token
-        request.state.session=session
-        request.state.data=json.loads(session['data'])
-        with database() as con:
-            owner=con.execute('SELECT id,username,email FROM owners WHERE id=?',(session['owner_id'],)).fetchone()
-            request.state.owner=dict(owner) if owner else None
-    response=await call_next(request)
-    if dynamic and request.state.new_cookie:
+            response = await call_next(request)
+    except DatabaseError as exc:
+        logger.error('Jaghvi request [%s]: %s', exc.code, str(exc))
+        response = unavailable_response(exc)
+    if dynamic and response.status_code < 500 and getattr(request.state,'new_cookie',None):
         response.set_cookie(COOKIE,request.state.new_cookie,httponly=True,secure=PRODUCTION,samesite='lax',
                             max_age=8*3600 if request.state.session['owner_id'] else 7*86400,path='/')
     response.headers['X-Content-Type-Options']='nosniff'
@@ -118,7 +205,9 @@ async def session_and_headers(request,call_next):
     if PRODUCTION: response.headers['Strict-Transport-Security']='max-age=31536000; includeSubDomains'
     if dynamic: response.headers['Cache-Control']='private, no-store'
     if request.url.path.startswith('/owner'): response.headers['X-Robots-Tag']='noindex, nofollow'
+    response.headers['X-Jaghvi-Build']=BUILD_ID
     return response
+
 
 def persist_session(request):
     with database(True) as con:
@@ -152,9 +241,8 @@ async def http_error(request,exc):
 
 @app.exception_handler(DatabaseError)
 async def database_error(request,exc):
-    import logging
-    logging.getLogger('jaghvi').exception('Database operation failed')
-    return Response('The studio is temporarily busy. Please retry in a moment.',503)
+    logger.error('Jaghvi query [%s]: %s', exc.code, str(exc))
+    return unavailable_response(exc)
 
 def clean_text(value,maxlen=5000):
     text=str(value or '').strip()
@@ -205,7 +293,26 @@ def get_product(con,pid):
     return p
 
 @app.get('/health')
-def health(): return {'status':'ok'}
+def health():
+    headers={'Cache-Control':'no-store','X-Robots-Tag':'noindex'}
+    if not ensure_startup():
+        error=_startup_error or DatabaseError()
+        return JSONResponse({'status':'unavailable','build':BUILD_ID,'code':error.code,
+                             'message':str(error)},status_code=503,headers=headers)
+    try:
+        with database() as con:
+            row=con.execute('SELECT 1 AS reachable').fetchone()
+            if not row or row['reachable'] != 1:
+                raise DatabaseError('The database did not pass its availability check.',code='DB_CHECK_FAILED')
+        return JSONResponse({'status':'ok','build':BUILD_ID,'database':'reachable'},headers=headers)
+    except DatabaseError as exc:
+        return JSONResponse({'status':'unavailable','build':BUILD_ID,'code':exc.code,
+                             'message':str(exc)},status_code=503,headers=headers)
+
+
+@app.get('/favicon.ico')
+def favicon():
+    return RedirectResponse('/static/assets/favicon.png',status_code=307)
 
 @app.get('/')
 def home(request:Request):
@@ -392,10 +499,10 @@ async def place_order(request:Request):
                 required(form,'phone',40),required(form,'address',500),required(form,'city',100),required(form,'region',100),
                 required(form,'postal_code',20),required(form,'country',80),clean_text(form.get('note'),2000),
                 subtotal,shipping,subtotal+shipping,site['currency'],now())).fetchone()[0]
-            for i in items:
-                p=i['product'];v=i['variant']
-                con.execute('INSERT INTO order_items(order_id,product_id,variant_id,name,variant,sku,quantity,price) VALUES (?,?,?,?,?,?,?,?)',
-                            (oid,p['id'],v['id'] if v else None,p['name'],v['label'] if v else '',v['sku'] if v else p['sku'],i['quantity'],i['price']))
+            con.executemany('INSERT INTO order_items(order_id,product_id,variant_id,name,variant,sku,quantity,price) VALUES (?,?,?,?,?,?,?,?)',
+                [(oid,i['product']['id'],i['variant']['id'] if i['variant'] else None,i['product']['name'],
+                  i['variant']['label'] if i['variant'] else '',i['variant']['sku'] if i['variant'] else i['product']['sku'],
+                  i['quantity'],i['price']) for i in items])
     except ValueError as exc:
         with database() as con: site=site_settings(con);items,_=cart_items(request,con)
         return render(request,'checkout.html',error=str(exc),form=form,items=items,subtotal=sum(i['total'] for i in items),shipping=cents(site['shipping_fee']),nonce=form.get('nonce',''))
@@ -540,12 +647,13 @@ async def owner_product_save(request:Request,pid:int|None=None):
                 con.execute('''UPDATE products SET name=?,slug=?,sku=?,description=?,material=?,category=?,collection_id=?,price=?,stock=?,status=?,featured=?,care=?,dimensions=?,updated_at=? WHERE id=?''',values+(pid,))
             else:
                 pid=con.execute('''INSERT INTO products(name,slug,sku,description,material,category,collection_id,price,stock,status,featured,care,dimensions,updated_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id''',values+(now(),)).fetchone()[0]
-            for index,path in enumerate(saved):
-                con.execute('INSERT INTO images(product_id,path,alt,position) VALUES (?,?,?,?)',(pid,path,name,images_count+index))
+            con.executemany('INSERT INTO images(product_id,path,alt,position) VALUES (?,?,?,?)',
+                            [(pid,path,name,images_count+index) for index,path in enumerate(saved)])
             if existing:
-                for image in existing['images']:
-                    con.execute('UPDATE images SET alt=?,position=? WHERE id=? AND product_id=?',
-                                (clean_text(form.get('alt_'+str(image['id']),image['alt']),300),integer(form.get('position_'+str(image['id']),image['position']),0,100),image['id'],pid))
+                con.executemany('UPDATE images SET alt=?,position=? WHERE id=? AND product_id=?',
+                    [(clean_text(form.get('alt_'+str(image['id']),image['alt']),300),
+                      integer(form.get('position_'+str(image['id']),image['position']),0,100),image['id'],pid)
+                     for image in existing['images']])
             audit(con,owner['id'],'Saved product: '+name)
     except (ValueError,IntegrityError) as exc:
         for path in saved: delete_image(path)
@@ -682,8 +790,8 @@ async def owner_storefront_save(request:Request):
             if saved: updated[key]=saved[0]
             if form.get(key+'_reset'): updated[key]=DEFAULTS[key]
         with database(True) as con:
-            for key,value in updated.items():
-                con.execute('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,json.dumps(value)))
+            con.executemany('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                            [(key,json.dumps(value)) for key,value in updated.items()])
             audit(con,owner['id'],'Updated storefront content and settings')
     except ValueError as exc:
         for path in new_files: delete_image(path)
@@ -802,8 +910,9 @@ async def owner_security_save(request:Request):
         if not password_valid(str(form.get('current_password','')),stored['password_hash']): raise ValueError('Your current password is incorrect.')
         password=str(form.get('new_password',''));validate_password(password)
         if password!=str(form.get('confirm_password','')): raise ValueError('The new passwords do not match.')
+        encoded = password_hasher.hash(password)
         with database(True) as con:
-            con.execute('UPDATE owners SET password_hash=? WHERE id=?',(password_hasher.hash(password),owner['id']))
+            con.execute('UPDATE owners SET password_hash=? WHERE id=?',(encoded,owner['id']))
             con.execute('DELETE FROM sessions WHERE owner_id=?',(owner['id'],))
             audit(con,owner['id'],'Changed password and revoked all owner sessions')
         token,session=new_session(owner['id']);request.state.new_cookie=token;request.state.session=session;request.state.data={}

@@ -24,3 +24,10 @@ __pycache__/
 Thumbs.db
 .vscode/
 .idea/
+
+# Generated archives, coverage and temporary test certificates
+*.zip
+.coverage
+htmlcov/
+*.pem
+*.key

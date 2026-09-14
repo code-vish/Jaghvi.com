@@ -3,7 +3,7 @@
 from __future__ import annotations
 import argparse, getpass, json, re, secrets, sqlite3, sys, time, zipfile
 from pathlib import Path
-from app.db import DATA, DB_PATH, UPLOADS, database, initialize
+from app.db import DATA, DB_PATH, UPLOADS, database, initialize, IS_VERCEL, TURSO_URL, TURSO_TOKEN
 from app.security import password_hasher, validate_password
 
 def read_password():
@@ -47,6 +47,8 @@ def reset_password():
     print('Password reset. All previous owner sessions were revoked.')
 
 def backup():
+    if IS_VERCEL or TURSO_URL or TURSO_TOKEN:
+        raise SystemExit('Use Turso backups/export and Blob backups for a remote store. No local backup was created.')
     initialize();directory=DATA/'backups';directory.mkdir(exist_ok=True)
     stamp=time.strftime('%Y%m%d-%H%M%S');snapshot=directory/f'jaghvi-{stamp}.sqlite3'
     with sqlite3.connect(DB_PATH) as source,sqlite3.connect(snapshot) as target:source.backup(target)

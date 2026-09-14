@@ -1,0 +1,59 @@
+JAGHVI COMPLETE REPAIR - TEST RECORD
+Build: jaghvi-http-repair-20260914
+Date: 2026-09-14
+Python: 3.13.5 on Linux x86_64
+
+FINAL SOURCE, RUN 1
+python -m pytest -q -o faulthandler_timeout=15 tests
+........................................................................ [100%]
+72 passed in 22.52s
+
+Breakdown: 31 existing storefront tests with local SQLite;
+35 HTTP-adapter/serialization/configuration tests;
+6 Vercel-mode subprocess tests against a disposable HTTPS protocol server.
+
+FINAL SOURCE, RUN 2
+JAGHVI_TEST_BACKEND=http python -m pytest -q -o faulthandler_timeout=15 tests/test_store.py
+...............................                                          [100%]
+31 passed in 16.68s
+
+This repeats all 31 storefront tests through the actual new HTTP adapter rather
+than the local SQLite adapter. It is 103 successful test executions in these two
+runs, not 103 distinct test functions. The remote protocol server is an emulator
+backed by a disposable local SQLite database, NOT Turso Cloud.
+
+Checks include:
+- Named/positional rows, int64 values, NULL, decimals, Unicode and binary values.
+- Real loopback HTTP requests, parameter binding, rotating connection batons.
+- Commit, rollback, constraint/FK enforcement, read-only connection closing.
+- Repeated and legacy-schema initialization preserving settings and products.
+- Bulk settings writes in one HTTP request.
+- Login, owner access control, CSRF, session rotation/revocation and rate limits.
+- Product drafts, photo validation/re-encoding, publication and archiving.
+- Storefront edits, unpaid order requests, inventory transitions and idempotency.
+- VERCEL=1 startup using HTTPS in a separate process, with secure cookies.
+- Environment-based owner creation, preserving that account across a restart.
+- A saved product surviving a second application process.
+- Operation with no owner/Blob credentials; no local database fallback on Vercel.
+- Missing/bad database credentials produce truthful 503 diagnostics without
+  revealing tokens or killing the process.
+- Required static files load from an unrelated working directory.
+- The build preflight queries the protocol server without creating schema/tables.
+- SQL errors do not produce a false healthy status.
+
+LIMITATIONS
+No live Vercel deployment, real Turso account/token/database, live Blob operation,
+real payment, courier, domain/DNS change or email delivery was performed.
+The libsql native driver could not be downloaded here (DNS/download failure).
+It is NOT used by this replacement; both dependency declarations remove it.
+Tests ran on Python 3.13.5; actual Vercel Python 3.12 runtime was not available.
+All pinned runtime dependencies except the lazy-loaded Vercel Blob SDK were
+present locally at their declared versions. Blob behavior is not covered.
+
+The earlier attempts that timed out are not counted as passed runs. Final
+completed commands are recorded above. An independent deployment remains
+necessary to validate the user's actual service configuration and network.
+
+The included Vercel preflight will run read-only connectivity checks using that
+project's own environment during its build. A connection failure stops that
+build; it does not clear or reset any live data.

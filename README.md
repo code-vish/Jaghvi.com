@@ -1,124 +1,170 @@
-# Jaghvi — Vercel deployment repository
+# Jaghvi: complete HTTP database repair
 
-This repository contains the Jaghvi storefront and private owner studio prepared for Vercel.
+**Build identifier:** `jaghvi-http-repair-20260914`  
+**Entry point:** `app.main:app`  
+**Database:** the existing Turso database, accessed through SQL over HTTPS.  
+**Product images:** Vercel Blob after the store is connected.  
+**Local development:** SQLite and local uploads, only outside Vercel.
 
-## Production architecture
+Start with **REPLACE-INSTRUCTIONS.txt**. This package supersedes the previous
+Vercel-ready archives and the single-file cursor patch. It retains the supplied
+storefront, logo, owner studio, product model, and existing database schema.
 
-- **FastAPI on Vercel** serves the storefront and owner dashboard.
-- **Turso** stores products, collections, owner accounts, sessions, orders, messages, subscribers, and site settings.
-- **Vercel Blob (Public)** stores product, collection, logo, hero, and story images.
-- **GitHub** stores only application code and built-in brand assets. Customer data, product data, uploaded images, and passwords do not belong in GitHub.
+## What this repair changes
 
-## 1. What goes in GitHub
+- Removes the `libsql` Python dependency and native cursor adapter from remote
+  database operations. Turso uses its documented `/v2/pipeline` HTTPS interface.
+- Decodes named columns, integer IDs, prices, NULLs and other results explicitly.
+  There is no assumption that a remote native cursor behaves like sqlite3.Cursor.
+- Preserves connection batons, server routing, foreign keys and explicit
+  transactions. A lost network response is not blindly retried as a new write.
+- Batches default settings, storefront changes and image records to avoid
+  unnecessary round trips inside short remote transactions.
+- Retains existing data. Schema initialization is additive, transactional and
+  idempotent. It does not drop tables, clear products or replace existing owners.
+- Uses module-relative absolute template/static paths and disables static-file
+  exclusion from the function. The old public/ directory is ignored if present.
+- Runs startup outside the ASGI event loop. Setup failures remain failures, but
+  return a safe HTTP 503 diagnostic instead of terminating the entire function.
+- Adds an actual readiness query and build identifier at `/health`. Missing
+  storage configuration never switches a Vercel store to an ephemeral database.
+- Adds a build preflight that checks files, imports and the database connection.
+  The database portion runs read-only queries: it does not create the schema or
+  owner account during the build.
 
-Push the contents of this folder as the repository root. The root of the GitHub repository must contain `pyproject.toml`, `requirements.txt`, and `app/`. Static storefront files live under `app/static/` so Vercel's FastAPI build can package them reliably.
+## Replace and deploy
 
-Recommended repository contents:
+Copy the **contents** of this folder into your existing project. Overwrite the
+matching application/configuration files, and include the new `scripts/` and
+Python modules. Keep `.git`, private environment files, `.vercel`, and local data.
+Do not delete/recreate GitHub, Vercel or Turso.
 
-```text
-.gitignore
-.vercelignore
-.env.example
-README.md
-pyproject.toml
-requirements.txt
-manage.py
-start.py
-app/
-  __init__.py
-  db.py
-  main.py
-  media.py
-  security.py
-  templates/
-app/
-  static/              # CSS, JS, icons and built-in brand assets
-tests/                 # optional in GitHub; excluded from the Vercel bundle
+```bash
+git add -A
+git commit -m "Install complete Jaghvi HTTP repair"
+git push
 ```
 
-Do **not** push `.env`, `.env.local`, `data/`, `.vercel/`, local SQLite files, passwords, Turso tokens, or Blob tokens.
+Keep **FastAPI**, root **./**, and default build/output settings. The build
+command is already declared in `pyproject.toml`. A custom Build Command configured
+in the dashboard can override it, so retain the default setting.
 
-## 2. Create/import the Vercel project
+Check that the new deployment uses this commit. Visit `/health`; success is:
 
-Import the GitHub repository in Vercel. Vercel should detect **FastAPI**. Keep the root directory as `./` and do not set a custom build command or output directory.
+```json
+{"status":"ok","build":"jaghvi-http-repair-20260914","database":"reachable"}
+```
 
-The first deployment can be left until storage is connected. If Vercel creates the project and the first build fails because storage variables are missing, that is expected; connect storage and redeploy.
+Then open the storefront and `/owner`. The health response is not proof that
+payments, email, image storage or courier integrations have been connected.
 
-## 3. Connect the persistent database
+## Existing credentials
 
-In the Vercel project, open **Storage** (or Marketplace) and add **Turso**. Connect/create a database for this project. The integration should add:
+Keep these existing Vercel environment variables. Do not put their values into
+GitHub, screenshots, support messages or this README:
 
 ```text
 TURSO_DATABASE_URL
 TURSO_AUTH_TOKEN
 ```
 
-The website intentionally refuses to use an ephemeral local SQLite database when it is running on Vercel.
-
-## 4. Connect persistent image storage
-
-In **Storage**, create a **Vercel Blob** store and choose **Public** access because product photographs are public storefront media. Connect it to the same project. Vercel adds:
+The empty storefront does not require an owner password or Blob token. Later,
+create the first owner by setting the following **in Vercel**, never in GitHub:
 
 ```text
-BLOB_READ_WRITE_TOKEN
+JAGHVI_OWNER_ID
+JAGHVI_OWNER_EMAIL
+JAGHVI_OWNER_PASSWORD
 ```
 
-Do not put that token in GitHub.
+Use an ID of 3-64 letters, digits, dots, hyphens or underscores; a valid email;
+and a private, unique password of 12-128 characters. An existing account is
+never replaced by this bootstrap. After successful sign-in, remove the bootstrap
+password from environment variables and redeploy. The hashed database account
+is retained; change the password in Owner Studio → Security.
 
-## 5. Create the first private owner login
+Connect a Public Vercel Blob store before cloud photo uploads. It supplies
+`BLOB_READ_WRITE_TOKEN`. Until then, uploads are rejected with an explanation,
+not saved to a temporary Vercel filesystem. Existing stored image URLs are kept.
 
-In **Project → Settings → Environment Variables**, add these for Production (and Preview if you want the owner studio to work in previews):
+Preview deployments currently use whichever database is connected to Preview.
+When that is the production database, preview writes affect production. Use a
+separate database for future development/testing; this repair does not change
+your current integration or create a branch.
 
-```text
-JAGHVI_OWNER_ID=your-master-id
-JAGHVI_OWNER_EMAIL=your-email@example.com
-JAGHVI_OWNER_PASSWORD=use-a-long-unique-password
-```
+## Diagnostic codes
 
-The password must be 12–128 characters. On the first successful startup, Jaghvi hashes the password and creates the owner only if no owner already exists. It never overwrites an existing owner from these values.
+`DB_CONFIG_MISSING`: the database variables are not available to that deployment.  
+`DB_URL_INVALID`: the database URL is malformed or the endpoint was not found.  
+`DB_AUTH_REJECTED`: the database rejected its configured credential.  
+`DB_NETWORK`: the database could not be reached.  
+`DB_LIMIT`: the database is enforcing usage/rate limits.  
+`DB_BUSY`: a lock or competing write prevented the query.  
+`DB_CONNECTION_EXPIRED`: the interactive database connection expired.  
+`DB_QUERY_FAILED`: a SQL operation failed.  
+`OWNER_SETUP_INVALID`: owner bootstrap values failed validation.  
+`APP_STARTUP_ERROR`: an unexpected initialization error occurred.
 
-After you have signed in successfully, you may remove `JAGHVI_OWNER_PASSWORD` from Vercel and redeploy. The database owner account remains intact. Password changes are available inside **Owner Studio → Security**.
+An unavailable response is HTTP 503 and is never reported as database-ready.
+Do not resolve these errors by resetting the database or committing credentials.
 
-## 6. Redeploy
+## Local development and tests
 
-Open **Deployments**, choose the latest deployment, and redeploy after the database, Blob store, and owner environment variables are connected.
-
-Then open:
-
-```text
-https://YOUR-PROJECT.vercel.app/
-https://YOUR-PROJECT.vercel.app/owner
-```
-
-## 7. Add jaghvi.com
-
-After the Vercel URL works, add `jaghvi.com` under **Project → Settings → Domains** and follow the DNS records shown by Vercel. The application already allows `jaghvi.com`, `*.jaghvi.com`, and `*.vercel.app` as trusted hosts.
-
-## Image-upload note
-
-Vercel server functions have a request-body limit. This build therefore keeps owner-studio server uploads conservative. For the initial catalog, upload compressed JPG/PNG/WebP images with a combined form-upload size below roughly 3 MB. The server re-encodes accepted images as WebP and stores them in Vercel Blob.
-
-If you later want original 10–30 MB camera files uploaded directly from the browser, switch the owner uploader to Vercel Blob client uploads. That is a separate improvement and does not affect the database or product model.
-
-## Local development
-
-Without Vercel/Turso environment variables, the same code falls back to local SQLite and local `data/uploads` storage:
+Use Python 3.12 or 3.13. The deployment requests Python 3.12 in `.python-version`.
+Dependencies remain pinned in both requirements.txt and pyproject.toml.
 
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
+python -m pytest -q tests
+```
+
+Run the same storefront suite over the HTTP adapter using a disposable local
+protocol server:
+
+```bash
+# macOS / Linux
+JAGHVI_TEST_BACKEND=http python -m pytest -q tests/test_store.py
+```
+
+```powershell
+# Windows PowerShell
+$env:JAGHVI_TEST_BACKEND = "http"
+python -m pytest -q tests/test_store.py
+Remove-Item Env:JAGHVI_TEST_BACKEND
+```
+
+Tests deliberately remove inherited live credentials before importing the app.
+They never use a customer's database. Six subprocess tests generate temporary
+HTTPS certificates using OpenSSL; those tests skip where OpenSSL is unavailable.
+No certificate, private key or test database is included in this package.
+
+For local store operation without production variables:
+
+```bash
 python manage.py owner
 python start.py
 ```
 
-Open `http://127.0.0.1:8000/` and `http://127.0.0.1:8000/owner`.
+## Verification limits
 
-## Security notes
+See TEST-RESULTS.txt. Tests use local SQLite and a disposable HTTP/HTTPS protocol
+emulator, **not a live Turso service**. Vercel's actual build/bundle/runtime, real
+Turso credentials, Blob uploads, payments, domain DNS and email delivery were not
+accessible here and have not been claimed as verified. Native libsql could not be
+downloaded in the build environment; it is removed from this replacement.
 
-- Never commit environment-variable values or passwords.
-- The owner password is Argon2-hashed before it is stored.
-- Owner sessions are stored server-side in the persistent database.
-- Product/customer data is not kept in GitHub.
-- Uploaded images are validated, stripped of EXIF/active metadata, resized, and re-encoded to WebP before storage.
+This package retains unpaid order requests, not a live payment integration.
+Confirm your policies, owner access, images, backups and business settings before
+accepting customer orders. Local backup commands intentionally refuse a remote
+store; use Turso and Blob backup/export facilities for its real data.
+
+## Implementation references
+
+- Turso SQL over HTTP: https://docs.turso.tech/sdk/http/reference
+- Turso HTTP quickstart: https://docs.turso.tech/sdk/http/quickstart
+- Vercel FastAPI entrypoints, static configuration, lifespan and build scripts:
+  https://vercel.com/docs/frameworks/backend/fastapi
+- Git-connected deployments: https://vercel.com/docs/git
+
+These references describe supported interfaces. They are not evidence that this
+specific store has already deployed successfully.

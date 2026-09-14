@@ -1,6 +1,6 @@
 [project]
 name = "jaghvi-store"
-version = "1.0.0"
+version = "1.1.0"
 description = "Jaghvi premium jewelry storefront and private owner studio"
 requires-python = ">=3.12,<3.14"
 dependencies = [
@@ -11,9 +11,16 @@ dependencies = [
   "python-multipart==0.0.29",
   "argon2-cffi==25.1.0",
   "Pillow==12.3.0",
-  "libsql==0.1.11",
+  "httpx==0.28.1",
   "vercel==0.10.0",
 ]
 
 [tool.vercel]
 entrypoint = "app.main:app"
+
+[tool.vercel.fastapi.static]
+cdn = false
+exclude = false
+
+[tool.vercel.scripts]
+build = "python scripts/verify_build.py"

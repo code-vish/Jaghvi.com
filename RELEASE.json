@@ -1,0 +1,12 @@
+{
+  "build": "jaghvi-http-repair-20260914",
+  "date": "2026-09-14",
+  "database_transport": "Turso SQL over HTTPS /v2/pipeline",
+  "entrypoint": "app.main:app",
+  "native_libsql_dependency": false,
+  "verified_live_deployment": false,
+  "automated_checks": {
+    "suite": 72,
+    "storefront_repeated_over_http": 31
+  }
+}

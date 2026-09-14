@@ -1,10 +1,11 @@
+"""Persistent Turso over HTTPS on Vercel; standard SQLite only for local use."""
 from __future__ import annotations
-
 import json
 import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+from .db_common import (DatabaseError, IntegrityError, Row, CursorAdapter, split_sql_script)
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get('JAGHVI_DATA_DIR', ROOT / 'data'))
@@ -16,157 +17,49 @@ TURSO_URL = os.environ.get('TURSO_DATABASE_URL', '').strip()
 TURSO_TOKEN = os.environ.get('TURSO_AUTH_TOKEN', '').strip()
 
 
-class DatabaseError(RuntimeError):
-    """Database is unavailable or a query failed."""
-
-
-class IntegrityError(DatabaseError):
-    """A database uniqueness / constraint rule was violated."""
-
-
-class Row:
-    """Small sqlite3.Row-compatible wrapper used by remote libSQL results."""
-
-    __slots__ = ('_columns', '_values', '_index')
-
-    def __init__(self, columns, values):
-        self._columns = tuple(columns)
-        self._values = tuple(values)
-        self._index = {str(name): i for i, name in enumerate(self._columns)}
-
-    def __getitem__(self, key):
-        if isinstance(key, str):
-            return self._values[self._index[key]]
-        return self._values[key]
-
-    def __iter__(self):
-        return iter(self._values)
-
-    def __len__(self):
-        return len(self._values)
-
-    def keys(self):
-        return list(self._columns)
-
-
-class CursorAdapter:
-    def __init__(self, cursor):
-        self._cursor = cursor
-        description = getattr(cursor, 'description', None) or []
-        self._columns = []
-        for item in description:
-            if isinstance(item, (tuple, list)):
-                self._columns.append(item[0])
-            else:
-                self._columns.append(getattr(item, 'name', str(item)))
-
-    @property
-    def rowcount(self):
-        value = getattr(self._cursor, 'rowcount', -1)
-        return value if value is not None else -1
-
-    @property
-    def lastrowid(self):
-        value = getattr(self._cursor, 'lastrowid', None)
-        if value is None:
-            value = getattr(self._cursor, 'last_insert_rowid', None)
-        return value
-
-    def _row(self, value):
-        if value is None or isinstance(value, sqlite3.Row):
-            return value
-        # Some DB-API implementations already provide key-access rows.
-        if hasattr(value, 'keys'):
-            try:
-                value['__jaghvi_probe__']
-            except (KeyError, IndexError, TypeError):
-                try:
-                    if self._columns:
-                        return Row(self._columns, [value[i] for i in range(len(self._columns))])
-                except Exception:
-                    return value
-            else:
-                return value
-        if self._columns:
-            return Row(self._columns, value)
-        return value
-
-    def fetchone(self):
-        return self._row(self._cursor.fetchone())
-
-    def fetchall(self):
-        return [self._row(row) for row in self._cursor.fetchall()]
-
-    def __iter__(self):
-        # libsql cursors expose fetchone(), but need not implement __iter__.
-        # Fetch through the adapter to preserve named rows for both drivers.
-        # Only None means exhaustion; rows containing NULL/0 are still rows.
-        while True:
-            row = self.fetchone()
-            if row is None:
-                return
-            yield row
-
-
 class ConnectionAdapter:
+    """Local SQLite wrapper. Remote queries do not pass through a native driver."""
     def __init__(self, raw, remote=False):
-        self._raw = raw
-        self.remote = remote
+        self._raw, self.remote = raw, remote
 
-    def _translate_error(self, exc):
-        text = str(exc).lower()
-        if any(part in text for part in ('unique constraint', 'constraint failed', 'duplicate', 'already exists')):
-            raise IntegrityError(str(exc)) from exc
-        raise DatabaseError(str(exc)) from exc
+    @staticmethod
+    def _translate_error(exc):
+        if isinstance(exc, sqlite3.IntegrityError):
+            raise IntegrityError() from exc
+        raise DatabaseError('A local database operation failed.', code='DB_QUERY_FAILED') from exc
 
     def execute(self, sql, params=()):
         try:
             return CursorAdapter(self._raw.execute(sql, params))
-        except (IntegrityError, DatabaseError):
-            raise
-        except Exception as exc:
+        except sqlite3.Error as exc:
             self._translate_error(exc)
 
     def executemany(self, sql, seq):
         try:
-            if hasattr(self._raw, 'executemany'):
-                return CursorAdapter(self._raw.executemany(sql, seq))
-            cursor = None
-            for params in seq:
-                cursor = self._raw.execute(sql, params)
-            return CursorAdapter(cursor)
-        except Exception as exc:
+            return CursorAdapter(self._raw.executemany(sql, seq))
+        except sqlite3.Error as exc:
             self._translate_error(exc)
 
     def executescript(self, script):
-        try:
-            if not self.remote and hasattr(self._raw, 'executescript'):
-                self._raw.executescript(script)
-                return
-            # The schema intentionally contains no semicolons inside string literals.
-            for statement in (part.strip() for part in script.split(';')):
-                if statement:
-                    self._raw.execute(statement)
-        except Exception as exc:
-            self._translate_error(exc)
+        # sqlite3.executescript commits an active transaction implicitly.
+        # Executing parsed statements individually preserves our atomic migration.
+        for statement in split_sql_script(script):
+            self.execute(statement)
 
     def commit(self):
         try:
             self._raw.commit()
-        except Exception as exc:
+        except sqlite3.Error as exc:
             self._translate_error(exc)
 
     def rollback(self):
         try:
             self._raw.rollback()
-        except Exception:
+        except sqlite3.Error:
             pass
 
     def close(self):
-        try:
-            self._raw.close()
-        except Exception:
-            pass
+        self._raw.close()
 
 
 DEFAULTS = {
@@ -257,37 +150,23 @@ CREATE TABLE IF NOT EXISTS audit (
 
 
 def _remote_connect():
-    if not TURSO_URL or not TURSO_TOKEN:
-        raise DatabaseError(
-            'Persistent database is not configured. Connect Turso to this Vercel project '
-            'so TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are available.'
-        )
-    try:
-        import libsql
-        raw = libsql.connect(database=TURSO_URL, auth_token=TURSO_TOKEN)
-        con = ConnectionAdapter(raw, remote=True)
-        # Foreign-key actions are part of product/order integrity.
-        try:
-            con.execute('PRAGMA foreign_keys=ON')
-        except DatabaseError:
-            pass
-        return con
-    except DatabaseError:
-        raise
-    except Exception as exc:
-        raise DatabaseError(f'Could not connect to Turso: {exc}') from exc
+    from .turso_http import TursoHTTPConnection
+    return TursoHTTPConnection(TURSO_URL, TURSO_TOKEN)
 
 
 def connect():
-    # Vercel must never silently write customer/admin data to its ephemeral filesystem.
-    if IS_VERCEL or TURSO_URL:
+    # No filesystem fallback on Vercel or when remote credentials are configured.
+    if IS_VERCEL or TURSO_URL or TURSO_TOKEN:
         return _remote_connect()
     DATA.mkdir(parents=True, exist_ok=True)
-    raw = sqlite3.connect(DB_PATH, timeout=15)
-    raw.row_factory = sqlite3.Row
-    raw.execute('PRAGMA foreign_keys=ON')
-    raw.execute('PRAGMA busy_timeout=15000')
-    return ConnectionAdapter(raw, remote=False)
+    try:
+        raw = sqlite3.connect(DB_PATH, timeout=15, isolation_level=None)
+        raw.row_factory = sqlite3.Row
+        raw.execute('PRAGMA foreign_keys=ON')
+        raw.execute('PRAGMA busy_timeout=15000')
+        return ConnectionAdapter(raw)
+    except sqlite3.Error as exc:
+        raise DatabaseError('The local database could not be opened.', code='DB_LOCAL_UNAVAILABLE') from exc
 
 
 @contextmanager
@@ -295,10 +174,11 @@ def database(write=False):
     con = connect()
     try:
         if write:
-            con.execute('BEGIN' if con.remote else 'BEGIN IMMEDIATE')
+            # Serialize read-then-write decisions, including owner provisioning.
+            con.execute('BEGIN IMMEDIATE')
         yield con
         con.commit()
-    except Exception:
+    except BaseException:
         con.rollback()
         raise
     finally:
@@ -306,29 +186,40 @@ def database(write=False):
 
 
 def initialize():
+    """Additive, atomic, idempotent initialization; preserves all existing data."""
     if not IS_VERCEL:
         UPLOADS.mkdir(parents=True, exist_ok=True)
-    with database() as con:
-        if not con.remote:
-            con.execute('PRAGMA journal_mode=WAL')
+    with database(write=True) as con:
         con.executescript(SCHEMA)
         columns = {row['name'] for row in con.execute('PRAGMA table_info(orders)')}
         if 'checkout_key' not in columns:
             con.execute('ALTER TABLE orders ADD COLUMN checkout_key TEXT')
         con.execute('CREATE UNIQUE INDEX IF NOT EXISTS orders_checkout_key ON orders(checkout_key)')
-        con.execute('UPDATE schema_version SET version=2')
-        for key, value in DEFAULTS.items():
-            con.execute('INSERT OR IGNORE INTO settings VALUES (?,?)', (key, json.dumps(value)))
-        if not con.execute('SELECT 1 FROM collections').fetchone():
-            con.executemany('INSERT INTO collections(name,slug,description,position) VALUES (?,?,?,?)', [
-                ('The Silver Collection','silver','A quiet luminosity. An enduring point of view.',0),
-                ('Fashion Jewelry','fashion','A little expression. An entirely different feeling.',1)
-            ])
+        # Defaults are inserted together, not as dozens of HTTP round trips.
+        con.executemany('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)',
+                        [(key, json.dumps(value)) for key, value in DEFAULTS.items()])
+        marker = con.execute("SELECT value FROM settings WHERE key='_catalog_seeded'").fetchone()
+        if marker is None:
+            if not con.execute('SELECT 1 FROM collections').fetchone():
+                con.executemany('INSERT INTO collections(name,slug,description,position) VALUES (?,?,?,?)', [
+                    ('The Silver Collection','silver','A quiet luminosity. An enduring point of view.',0),
+                    ('Fashion Jewelry','fashion','A little expression. An entirely different feeling.',1),
+                ])
+            con.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('_catalog_seeded','true')")
+        con.execute('UPDATE schema_version SET version=2 WHERE version<2')
 
 
 def site_settings(con):
-    return {**DEFAULTS, **{r['key']: json.loads(r['value']) for r in con.execute('SELECT * FROM settings')}}
+    stored = {}
+    for row in con.execute('SELECT key,value FROM settings'):
+        if row['key'].startswith('_'):
+            continue
+        try:
+            stored[row['key']] = json.loads(row['value'])
+        except (json.JSONDecodeError, TypeError):
+            raise DatabaseError('A saved setting contains invalid JSON.', code='DB_SETTINGS_INVALID') from None
+    return {**DEFAULTS, **stored}
 
 
 def rows(cursor):
-    return [dict(r) for r in cursor.fetchall()]
+    return [dict(row) for row in cursor.fetchall()]

@@ -1,7 +1,21 @@
+.git/
+.venv/
+venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.env
+.env.*
+!.env.example
 tests/
 docs/
 data/
+public/
 previews/
+*.zip
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 Jaghvi-Preview.html
 START-HERE.html
 Dockerfile
@@ -10,3 +24,4 @@ Caddyfile
 Start-Windows.bat
 Start-Mac.command
 requirements-dev.txt
+TEST-RESULTS.txt

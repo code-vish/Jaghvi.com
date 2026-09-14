@@ -5,5 +5,5 @@ Jinja2==3.1.6
 python-multipart==0.0.29
 argon2-cffi==25.1.0
 Pillow==12.3.0
-libsql==0.1.11
+httpx==0.28.1
 vercel==0.10.0
