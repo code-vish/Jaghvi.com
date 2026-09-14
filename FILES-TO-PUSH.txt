@@ -1,0 +1,32 @@
+JAGHVI — FILES TO PUSH TO GITHUB
+
+Copy the CONTENTS of this folder into the root of your existing GitHub project.
+
+IMPORTANT:
+- Keep your existing .git folder on your PC. Do not delete it.
+- Delete the old project files first, then copy these files in.
+- Do NOT upload the ZIP itself to GitHub.
+- Do NOT upload .env, .vercel, data, or local database files.
+- The old public/ folder should NOT exist anymore.
+- Static assets now live in app/static/.
+
+Expected root:
+app/
+tests/
+.env.example
+.gitignore
+.vercelignore
+DEPLOY-CHECKLIST.txt
+README.md
+manage.py
+pyproject.toml
+requirements.txt
+requirements-dev.txt
+start.py
+
+After replacing the files:
+git add -A
+git commit -m "Use corrected Vercel-ready Jaghvi project"
+git push
+
+Vercel should deploy automatically from the new commit.
