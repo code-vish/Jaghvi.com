@@ -58,12 +58,14 @@ async def lifespan(app):
 app=FastAPI(title='Jaghvi',lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 default_hosts='localhost,127.0.0.1,testserver,*.vercel.app,jaghvi.com,*.jaghvi.com'
 app.add_middleware(TrustedHostMiddleware,allowed_hosts=[x.strip() for x in os.environ.get('ALLOWED_HOSTS',default_hosts).split(',') if x.strip()])
-STATIC_ROOT=ROOT/'public/static'
-app.mount('/static',StaticFiles(directory=STATIC_ROOT),name='static')
+STATIC_ROOT=ROOT/'app/static'
+# Keep the static directory inside the FastAPI source tree and pass a literal path.
+# Vercel can detect this mount at build time and include/promote the files correctly.
+app.mount('/static',StaticFiles(directory='app/static'),name='static')
 if not IS_VERCEL:
     UPLOADS.mkdir(parents=True,exist_ok=True)
     app.mount('/media',StaticFiles(directory=UPLOADS),name='media')
-templates=Jinja2Templates(directory=ROOT/'app/templates')
+templates=Jinja2Templates(directory='app/templates')
 templates.env.filters['money']=lambda v:f'{int(v)/100:,.2f}'.removesuffix('.00')
 templates.env.filters['date']=lambda v:__import__('datetime').datetime.fromtimestamp(v,__import__('datetime').timezone.utc).strftime('%d %b %Y')
 

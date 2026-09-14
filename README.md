@@ -11,7 +11,7 @@ This repository contains the Jaghvi storefront and private owner studio prepared
 
 ## 1. What goes in GitHub
 
-Push the contents of this folder as the repository root. The root of the GitHub repository must contain `pyproject.toml`, `requirements.txt`, `app/`, and `public/`.
+Push the contents of this folder as the repository root. The root of the GitHub repository must contain `pyproject.toml`, `requirements.txt`, and `app/`. Static storefront files live under `app/static/` so Vercel's FastAPI build can package them reliably.
 
 Recommended repository contents:
 
@@ -31,8 +31,8 @@ app/
   media.py
   security.py
   templates/
-public/
-  static/
+app/
+  static/              # CSS, JS, icons and built-in brand assets
 tests/                 # optional in GitHub; excluded from the Vercel bundle
 ```
 
