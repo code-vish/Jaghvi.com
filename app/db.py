@@ -98,8 +98,14 @@ class CursorAdapter:
         return [self._row(row) for row in self._cursor.fetchall()]
 
     def __iter__(self):
-        for row in self._cursor:
-            yield self._row(row)
+        # libsql cursors expose fetchone(), but need not implement __iter__.
+        # Fetch through the adapter to preserve named rows for both drivers.
+        # Only None means exhaustion; rows containing NULL/0 are still rows.
+        while True:
+            row = self.fetchone()
+            if row is None:
+                return
+            yield row
 
 
 class ConnectionAdapter:
